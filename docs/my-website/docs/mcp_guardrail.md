@@ -97,22 +97,22 @@ In addition to server-side MCP guardrails, the Python client supports a simple c
 Key points:
 - `action_guard` is an optional callable passed to `litellm.completion` / `litellm.acompletion`.
 - The guard is invoked for each pending MCP tool call before execution.
-- The guard receives a dict with the following keys: `name`, `arguments`, `tool_call_id`, `server_name`.
-- The guard may return `litellm.types.utils.GuardDecision.ALLOW` (or the string `'ALLOW'` / True) to permit execution, or `litellm.types.utils.GuardDecision.BLOCK` (or `'BLOCK'` / False) to block it.
+- The guard receives a dict with the following keys: `name`, `arguments`, `server_name`.
+- The guard may return `litellm.types.utils.ActionGuardDecision.ALLOW` (or the string `'ALLOW'`) to permit execution, or `litellm.types.utils.ActionGuardDecision.BLOCK` (or `'BLOCK'`) to block it.
 
 Example usage:
 
 ```python title="Client-side action_guard example"
 from agent_action_guard import is_action_harmful
-from litellm.types.utils import GuardDecision
+from litellm.types.utils import ActionGuardDecision
 import litellm
 
 def my_action_guard(action):
   # This can use code-based validation or a classifier model
   is_harmful, confidence = is_action_harmful(action)
   if is_harmful:
-      return GuardDecision.BLOCK
-  return GuardDecision.ALLOW
+      return ActionGuardDecision.BLOCK
+  return ActionGuardDecision.ALLOW
 
 response = litellm.completion(
   model="openai/gpt-5-mini",
