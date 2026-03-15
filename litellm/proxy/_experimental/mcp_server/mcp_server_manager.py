@@ -9,6 +9,7 @@ This is a Proxy
 import asyncio
 import datetime
 import hashlib
+import inspect
 import json
 import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
@@ -2224,11 +2225,21 @@ class MCPServerManager:
                     "server_name": server_name,
                 }
                 guard_decision = action_guard(guard_input)
-                allow = True
-                if isinstance(guard_decision, ActionGuardDecision):
+                if inspect.isawaitable(guard_decision):
+                    guard_decision = await guard_decision
+                if isinstance(guard_decision, bool):
+                    allow = guard_decision
+                elif isinstance(guard_decision, ActionGuardDecision):
                     allow = guard_decision == ActionGuardDecision.ALLOW
                 elif isinstance(guard_decision, str):
                     allow = guard_decision.upper() == "ALLOW"
+                else:
+                    # Unknown return type: default to deny for safety
+                    verbose_logger.warning(
+                        "action_guard returned unexpected type %s, blocking tool call",
+                        type(guard_decision).__name__,
+                    )
+                    allow = False
 
                 if not allow:
                     return CallToolResult(
