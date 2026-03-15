@@ -21,6 +21,9 @@ async def test_action_guard_blocks(monkeypatch):
         async def call_tool(self, **kwargs):
             return None
 
+        def _get_mcp_server_from_tool_name(self, *args, **kwargs):
+            return None
+
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
         FakeManager(),
@@ -57,6 +60,9 @@ async def test_action_guard_allows(monkeypatch):
     class FakeManager:
         async def call_tool(self, **kwargs):
             return FakeResult()
+
+        def _get_mcp_server_from_tool_name(self, *args, **kwargs):
+            return None
 
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
