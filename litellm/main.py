@@ -424,6 +424,7 @@ async def acompletion(  # noqa: PLR0915
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: Optional[bool] = None,
+    action_guard: Optional[Callable] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -551,6 +552,7 @@ async def acompletion(  # noqa: PLR0915
         "response_format": response_format,
         "seed": seed,
         "tools": tools,
+        "action_guard": action_guard,
         "tool_choice": tool_choice,
         "parallel_tool_calls": parallel_tool_calls,
         "logprobs": logprobs,
@@ -1072,6 +1074,7 @@ def completion(  # type: ignore # noqa: PLR0915
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
+    action_guard: Optional[Callable] = None,
     tool_choice: Optional[Union[str, dict]] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
@@ -1148,6 +1151,7 @@ def completion(  # type: ignore # noqa: PLR0915
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
+    kwargs["action_guard"] = action_guard
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params

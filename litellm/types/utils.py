@@ -3571,3 +3571,11 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: Optional[str]  # the model being used for the LLM call
+
+
+# Guard decision enum for action guards
+class ActionGuardDecision(str, Enum):
+    """Decision returned by an action guard for pending tool calls."""
+
+    ALLOW = "ALLOW"
+    BLOCK = "BLOCK"

@@ -88,3 +88,38 @@ MCP guardrails work with all LiteLLM-supported guardrail providers:
 - **Noma**: Noma Security
 - **PANW Prisma AIRS**: Prisma AIRS guardrails
 - **Custom**: Your own guardrail implementations
+
+
+## Action Guard (client-side centralized validation of tool calls)
+
+In addition to server-side MCP guardrails, the Python client supports a simple client-side `action_guard` parameter that lets you centrally validate or block agent tool calls before they are executed. This is useful for local policy enforcement, extra vetting, or integration with a classifier.
+
+Key points:
+- `action_guard` is an optional callable passed to `litellm.completion` / `litellm.acompletion`.
+- The guard is invoked for each pending MCP tool call before execution.
+- The guard receives a dict with the following keys: `name`, `arguments`, `tool_call_id`, `server_name`.
+- The guard may return `litellm.types.utils.GuardDecision.ALLOW` (or the string `'ALLOW'` / True) to permit execution, or `litellm.types.utils.GuardDecision.BLOCK` (or `'BLOCK'` / False) to block it.
+
+Example usage:
+
+```python title="Client-side action_guard example"
+from agent_action_guard import is_action_harmful
+from litellm.types.utils import GuardDecision
+import litellm
+
+def my_action_guard(action):
+  # This can use code-based validation or a classifier model
+  is_harmful, confidence = is_action_harmful(action)
+  if is_harmful:
+      return GuardDecision.BLOCK
+  return GuardDecision.ALLOW
+
+response = litellm.completion(
+  model="openai/gpt-5-mini",
+  messages=[{"role": "user", "content": "Please call a tool"}],
+  tools=tools,
+  action_guard=my_action_guard,
+)
+```
+
+Note: `action_guard` is executed locally inside the client process and is independent of server-side guardrails.

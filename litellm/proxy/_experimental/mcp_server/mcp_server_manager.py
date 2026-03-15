@@ -2171,6 +2171,7 @@ class MCPServerManager:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         host_progress_callback: Optional[Callable] = None,
+        action_guard: Optional[Callable] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -2188,6 +2189,9 @@ class MCPServerManager:
         Returns:
             CallToolResult from the MCP server
         """
+        from litellm.types.utils import ActionGuardDecision
+        from mcp.types import TextContent
+
         start_time = datetime.datetime.now()
 
         # Get the MCP server
@@ -2210,6 +2214,46 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
             )
+
+        # If an action_guard is provided, invoke it to decide whether to allow/block this call
+        if action_guard is not None:
+            try:
+                guard_input = {
+                    "name": name,
+                    "arguments": arguments,
+                    "server_name": server_name,
+                }
+                guard_decision = action_guard(guard_input)
+                allow = True
+                if isinstance(guard_decision, ActionGuardDecision):
+                    allow = guard_decision == ActionGuardDecision.ALLOW
+                elif isinstance(guard_decision, str):
+                    allow = guard_decision.upper() == "ALLOW"
+
+                if not allow:
+                    return CallToolResult(
+                        content=[
+                            TextContent(
+                                type="text",
+                                text="Tool call blocked by action_guard",
+                            )
+                        ],
+                        isError=True,
+                    )
+            except Exception as guard_exc:
+                verbose_logger.exception(
+                    "action_guard raised exception, blocking tool call: %s",
+                    guard_exc,
+                )
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text="Tool call blocked due to action_guard exception",
+                        )
+                    ],
+                    isError=True,
+                )
 
         # Prepare tasks for during hooks
         tasks = []
