@@ -1151,7 +1151,6 @@ def completion(  # type: ignore # noqa: PLR0915
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
-    kwargs["action_guard"] = action_guard
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
