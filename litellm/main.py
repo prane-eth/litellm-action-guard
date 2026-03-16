@@ -54,6 +54,8 @@ from typing_extensions import overload
 
 import litellm
 
+ACTION_GUARD_BLOCKED_MESSAGE = "Tool call blocked by action_guard"
+
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
 
@@ -931,7 +933,7 @@ def mock_completion(
                     if guard_decision != ActionGuardDecision.ALLOW:
                         model_response.choices[0].message.tool_calls = None  # type: ignore
                         model_response.choices[0].message.content = (  # type: ignore
-                            "Tool call blocked by action_guard"
+                            ACTION_GUARD_BLOCKED_MESSAGE
                         )
                         model_response.choices[0].finish_reason = "stop"  # type: ignore
                         break
