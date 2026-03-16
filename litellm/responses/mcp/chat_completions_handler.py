@@ -1,6 +1,7 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
 import json
+import logging
 from typing import (
     Any,
     Callable,
@@ -86,10 +87,11 @@ async def _apply_action_guard_to_non_mcp_tool_calls(
                     action_guard=action_guard,
                     guard_input=guard_input,
                 )
-            except Exception as e:
+            except Exception:
+                logging.exception("Exception while executing action_guard for tool call.")
                 _set_blocked_tool_call_message(
                     response=response,
-                    block_message=f"Tool call blocked by action_guard exception: {str(e)}",
+                    block_message="Tool call blocked by action_guard",
                 )
                 return response
 
