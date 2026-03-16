@@ -329,6 +329,7 @@ async def aresponses_api_with_mcp(
                 raw_headers=raw_headers_from_request,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
+                action_guard=kwargs.get("action_guard"),
             )
 
             if tool_results:

@@ -424,6 +424,7 @@ async def acompletion(  # noqa: PLR0915
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: Optional[bool] = None,
+    action_guard: Optional[Callable] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -551,6 +552,7 @@ async def acompletion(  # noqa: PLR0915
         "response_format": response_format,
         "seed": seed,
         "tools": tools,
+        "action_guard": action_guard,
         "tool_choice": tool_choice,
         "parallel_tool_calls": parallel_tool_calls,
         "logprobs": logprobs,
@@ -1095,6 +1097,7 @@ def completion(  # type: ignore # noqa: PLR0915
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: Optional[bool] = None,
+    action_guard: Optional[Callable] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1169,9 +1172,10 @@ def completion(  # type: ignore # noqa: PLR0915
         # Check if MCP tools are present (following responses pattern)
         # Cast tools to Optional[Iterable[ToolParam]] for type checking
         tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+        should_use_mcp_gateway = LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
             tools=tools_for_mcp
-        ):
+        )
+        if should_use_mcp_gateway or action_guard is not None:
             # Return coroutine - acompletion will await it
             # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
             return acompletion_with_mcp(  # type: ignore[return-value]
@@ -1216,6 +1220,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 web_search_options=web_search_options,
                 shared_session=shared_session,
                 enable_json_schema_validation=enable_json_schema_validation,
+                action_guard=action_guard,
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)

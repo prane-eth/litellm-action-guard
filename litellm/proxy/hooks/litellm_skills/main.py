@@ -26,7 +26,7 @@ Usage:
 
 import base64
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -35,7 +35,7 @@ from litellm.llms.litellm_proxy.skills.prompt_injection import (
     SkillPromptInjectionHandler,
 )
 from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import ActionGuardDecision, CallTypes, CallTypesLiteral
 
 
 class SkillsInjectionHook(CustomLogger):
@@ -396,6 +396,45 @@ class SkillsInjectionHook(CustomLogger):
             skill_files=all_skill_files,
         )
 
+    async def _should_allow_action(
+        self,
+        *,
+        action_guard: Optional[Callable[[Dict[str, Any]], Any]],
+        name: str,
+        arguments: Dict[str, Any],
+        server_name: str,
+    ) -> bool:
+        """
+        Evaluate action_guard for a pending (non-MCP) internal tool execution.
+
+        - Supports sync and async guards
+        - Unknown/unsupported return types default to deny
+        - Exceptions default to deny
+        """
+
+        if action_guard is None:
+            return True
+
+        from litellm._action_guard import call_action_guard_async
+
+        guard_input = {"name": name, "arguments": arguments, "server_name": server_name}
+        try:
+            decision = await call_action_guard_async(
+                action_guard=action_guard, guard_input=guard_input
+            )
+            if isinstance(decision, ActionGuardDecision):
+                return decision == ActionGuardDecision.ALLOW
+            verbose_proxy_logger.warning(
+                "action_guard returned unsupported type %s, blocking tool call",
+                type(decision).__name__,
+            )
+            return False
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "action_guard raised exception, blocking tool call: %s", e
+            )
+            return False
+
     def _extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
         """Extract tool calls from response, handling both formats."""
         tool_calls = []
@@ -481,6 +520,7 @@ class SkillsInjectionHook(CustomLogger):
         executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         generated_files: List[Dict[str, Any]] = []
         current_response = response
+        action_guard = data.get("action_guard")
 
         for iteration in range(self.max_iterations):
             # Extract tool calls from current response
@@ -529,15 +569,33 @@ class SkillsInjectionHook(CustomLogger):
 
                 # Execute if it's litellm_code_execution OR a skill tool
                 if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
-                    code = tool_input.get("code", "")
-                    result = await self._execute_code(
-                        code, skill_files, executor, generated_files
+                    allow = await self._should_allow_action(
+                        action_guard=action_guard,
+                        name=tool_name,
+                        arguments=tool_input,
+                        server_name="litellm_internal",
                     )
+                    if not allow:
+                        result = "Tool call blocked by action_guard"
+                    else:
+                        code = tool_input.get("code", "")
+                        result = await self._execute_code(
+                            code, skill_files, executor, generated_files
+                        )
                 elif tool_name.startswith("skill_"):
-                    # Skill tool - execute the skill's code
-                    result = await self._execute_skill_tool(
-                        tool_name, tool_input, skill_files, executor, generated_files
+                    allow = await self._should_allow_action(
+                        action_guard=action_guard,
+                        name=tool_name,
+                        arguments=tool_input,
+                        server_name="litellm_internal",
                     )
+                    if not allow:
+                        result = "Tool call blocked by action_guard"
+                    else:
+                        # Skill tool - execute the skill's code
+                        result = await self._execute_skill_tool(
+                            tool_name, tool_input, skill_files, executor, generated_files
+                        )
                 else:
                     result = f"Tool '{tool_name}' not handled"
 
@@ -736,6 +794,7 @@ print('No executable skill module found')
         executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
         generated_files: List[Dict[str, Any]] = []
         current_response: Any = response
+        action_guard = data.get("action_guard")
 
         for iteration in range(self.max_iterations):
             # OpenAI format response has choices[0].message
@@ -780,6 +839,7 @@ print('No executable skill module found')
                         skill_files=skill_files,
                         executor=executor,
                         generated_files=generated_files,
+                        action_guard=action_guard,
                     )
                 else:
                     # Non-code-execution tool - cannot handle
@@ -816,11 +876,21 @@ print('No executable skill module found')
         skill_files: Dict[str, bytes],
         executor: Any,
         generated_files: List[Dict[str, Any]],
+        action_guard: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> str:
         """Execute a litellm_code_execution tool call and return result string."""
         try:
             args = json.loads(tool_call.function.arguments)
             code = args.get("code", "")
+
+            allow = await self._should_allow_action(
+                action_guard=action_guard,
+                name=getattr(tool_call.function, "name", "litellm_code_execution"),
+                arguments=args,
+                server_name="litellm_internal",
+            )
+            if not allow:
+                return "Tool call blocked by action_guard"
 
             verbose_proxy_logger.debug(
                 f"SkillsInjectionHook: Executing code ({len(code)} chars)"
