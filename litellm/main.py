@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
+from litellm._action_guard import call_action_guard_sync
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -109,6 +110,7 @@ from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    ActionGuardDecision,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
     RawRequestTypedDict,
@@ -424,6 +426,7 @@ async def acompletion(  # noqa: PLR0915
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: Optional[bool] = None,
+    action_guard: Optional[Callable] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -551,6 +554,7 @@ async def acompletion(  # noqa: PLR0915
         "response_format": response_format,
         "seed": seed,
         "tools": tools,
+        "action_guard": action_guard,
         "tool_choice": tool_choice,
         "parallel_tool_calls": parallel_tool_calls,
         "logprobs": logprobs,
@@ -778,6 +782,7 @@ def mock_completion(
     logging=None,
     custom_llm_provider=None,
     timeout: Optional[Union[float, str, httpx.Timeout]] = None,
+    action_guard: Optional[Callable[[Dict[str, Any]], Any]] = None,
     **kwargs,
 ):
     """
@@ -897,6 +902,39 @@ def mock_completion(
                 ChatCompletionMessageToolCall(**tool_call)
                 for tool_call in mock_tool_calls
             ]
+
+            # Apply action guard to mock tool calls so test and local workflows mirror
+            # non-mock tool-execution safety behavior.
+            if action_guard is not None:
+                for tool_call in model_response.choices[0].message.tool_calls:  # type: ignore
+                    tool_fn = getattr(tool_call, "function", None)
+                    tool_name = getattr(tool_fn, "name", None)
+                    tool_args: Any = getattr(tool_fn, "arguments", {})
+                    if isinstance(tool_args, str):
+                        try:
+                            tool_args = json.loads(tool_args)
+                        except Exception:
+                            pass
+
+                    try:
+                        guard_decision = call_action_guard_sync(
+                            action_guard=action_guard,
+                            guard_input={
+                                "name": tool_name,
+                                "arguments": tool_args,
+                                "server_name": None,
+                            },
+                        )
+                    except Exception:
+                        guard_decision = ActionGuardDecision.BLOCK
+
+                    if guard_decision != ActionGuardDecision.ALLOW:
+                        model_response.choices[0].message.tool_calls = None  # type: ignore
+                        model_response.choices[0].message.content = (  # type: ignore
+                            "Tool call blocked by action_guard"
+                        )
+                        model_response.choices[0].finish_reason = "stop"  # type: ignore
+                        break
 
         setattr(
             model_response,
@@ -1095,6 +1133,7 @@ def completion(  # type: ignore # noqa: PLR0915
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: Optional[bool] = None,
+    action_guard: Optional[Callable] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1169,9 +1208,12 @@ def completion(  # type: ignore # noqa: PLR0915
         # Check if MCP tools are present (following responses pattern)
         # Cast tools to Optional[Iterable[ToolParam]] for type checking
         tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
-            tools=tools_for_mcp
-        ):
+        should_use_mcp_gateway = (
+            LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+                tools=tools_for_mcp
+            )
+        )
+        if should_use_mcp_gateway:
             # Return coroutine - acompletion will await it
             # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
             return acompletion_with_mcp(  # type: ignore[return-value]
@@ -1216,6 +1258,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 web_search_options=web_search_options,
                 shared_session=shared_session,
                 enable_json_schema_validation=enable_json_schema_validation,
+                action_guard=action_guard,
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
@@ -1603,6 +1646,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 mock_timeout=mock_timeout,
                 timeout=timeout,
+                action_guard=action_guard,
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map

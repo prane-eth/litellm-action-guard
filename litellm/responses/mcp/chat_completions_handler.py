@@ -1,19 +1,111 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
+import json
 from typing import (
     Any,
+    Callable,
     List,
     Optional,
     Union,
     cast,
 )
 
+from litellm._action_guard import call_action_guard_async
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ActionGuardDecision, ModelResponse
 from litellm.utils import CustomStreamWrapper
+
+
+def _extract_tool_call_details(tool_call: Any) -> tuple[Optional[str], Any]:
+    """Extract tool call name and decoded arguments from OpenAI-style tool payloads."""
+    function_obj = getattr(tool_call, "function", None)
+    if function_obj is None and isinstance(tool_call, dict):
+        function_obj = tool_call.get("function")
+
+    function_name: Optional[str] = None
+    raw_arguments: Any = {}
+
+    if isinstance(function_obj, dict):
+        function_name = cast(Optional[str], function_obj.get("name"))
+        raw_arguments = function_obj.get("arguments", {})
+    else:
+        function_name = cast(Optional[str], getattr(function_obj, "name", None))
+        raw_arguments = getattr(function_obj, "arguments", {})
+
+    if isinstance(raw_arguments, str):
+        try:
+            return function_name, json.loads(raw_arguments)
+        except Exception:
+            return function_name, raw_arguments
+
+    return function_name, raw_arguments
+
+
+def _set_blocked_tool_call_message(response: ModelResponse, block_message: str) -> None:
+    """Replace tool calls with a guard block message on the response choices."""
+    if not getattr(response, "choices", None):
+        return
+
+    for choice in response.choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        setattr(message, "tool_calls", None)
+        setattr(message, "content", block_message)
+        if hasattr(choice, "finish_reason"):
+            setattr(choice, "finish_reason", "stop")
+
+
+async def _apply_action_guard_to_non_mcp_tool_calls(
+    response: ModelResponse,
+    action_guard: Optional[Callable],
+) -> ModelResponse:
+    """Apply action_guard to model-generated non-MCP tool calls before returning."""
+    if action_guard is None or not getattr(response, "choices", None):
+        return response
+
+    for choice in response.choices:
+        message = getattr(choice, "message", None)
+        tool_calls = getattr(message, "tool_calls", None) if message else None
+        if not tool_calls:
+            continue
+
+        for tool_call in tool_calls:
+            function_name, arguments = _extract_tool_call_details(tool_call)
+            guard_input = {
+                "name": function_name,
+                "arguments": arguments,
+                "server_name": None,
+            }
+
+            try:
+                guard_decision = await call_action_guard_async(
+                    action_guard=action_guard,
+                    guard_input=guard_input,
+                )
+            except Exception:
+                from litellm._logging import verbose_logger
+
+                verbose_logger.exception(
+                    "Exception while executing action_guard for tool call."
+                )
+                _set_blocked_tool_call_message(
+                    response=response,
+                    block_message="Tool call blocked by action_guard",
+                )
+                return response
+
+            if guard_decision != ActionGuardDecision.ALLOW:
+                _set_blocked_tool_call_message(
+                    response=response,
+                    block_message="Tool call blocked by action_guard",
+                )
+                return response
+
+    return response
 
 
 def _add_mcp_metadata_to_response(
@@ -106,12 +198,19 @@ async def acompletion_with_mcp(  # noqa: PLR0915
 
     if not mcp_tools_with_litellm_proxy:
         # No MCP tools, proceed with regular completion
-        return await litellm_acompletion(
+        response = await litellm_acompletion(
             model=model,
             messages=messages,
             tools=tools,
+            _skip_mcp_handler=True,
             **kwargs,
         )
+        if isinstance(response, ModelResponse):
+            return await _apply_action_guard_to_non_mcp_tool_calls(
+                response=response,
+                action_guard=kwargs.get("action_guard"),
+            )
+        return response
 
     # Extract user_api_key_auth from metadata or kwargs
     user_api_key_auth = kwargs.get("user_api_key_auth") or (
@@ -220,6 +319,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 litellm_trace_id,
                 openai_tools,
                 base_call_args,
+                action_guard=None,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -232,6 +332,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 self.litellm_call_id = litellm_call_id
                 self.litellm_trace_id = litellm_trace_id
                 self.openai_tools = openai_tools
+                self.action_guard = action_guard
                 self.base_call_args = base_call_args
                 self.collected_chunks: List[ModelResponseStream] = []
                 self.tool_calls: Optional[List] = None
@@ -456,6 +557,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                                 raw_headers=self.raw_headers,
                                 litellm_call_id=self.litellm_call_id,
                                 litellm_trace_id=self.litellm_trace_id,
+                                action_guard=self.action_guard,
                             )
                         )
 
@@ -518,6 +620,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
             base_call_args=base_call_args,
+            action_guard=kwargs.get("action_guard"),
         )
 
         # Create a wrapper class that delegates to our custom iterator
@@ -637,6 +740,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         raw_headers=raw_headers,
         litellm_call_id=kwargs.get("litellm_call_id"),
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        action_guard=kwargs.get("action_guard"),
     )
 
     if not tool_results:

@@ -93,6 +93,9 @@ except ImportError:
         return _ToolNameValidationResult()
 
 
+ACTION_GUARD_BLOCKED_MESSAGE = "Tool call blocked by action_guard"
+ACTION_GUARD_EXCEPTION_MESSAGE = "Tool call blocked due to action_guard exception"
+
 # Probe includes characters on both sides of the separator to mimic real prefixed tool names.
 _separator_probe_tool_name = f"litellm{MCP_TOOL_PREFIX_SEPARATOR}probe"
 _separator_probe = validate_tool_name(_separator_probe_tool_name)
@@ -2171,6 +2174,7 @@ class MCPServerManager:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         host_progress_callback: Optional[Callable] = None,
+        action_guard: Optional[Callable] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -2188,6 +2192,9 @@ class MCPServerManager:
         Returns:
             CallToolResult from the MCP server
         """
+        from litellm.types.utils import ActionGuardDecision
+        from mcp.types import TextContent
+
         start_time = datetime.datetime.now()
 
         # Get the MCP server
@@ -2210,6 +2217,54 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
             )
+
+        # If an action_guard is provided, invoke it to decide whether to allow/block this call
+        if action_guard is not None:
+            try:
+                from litellm._action_guard import call_action_guard_async
+                guard_input = {
+                    "name": name,
+                    "arguments": arguments,
+                    "server_name": server_name,
+                }
+
+                guard_decision = await call_action_guard_async(
+                    action_guard=action_guard, guard_input=guard_input
+                )
+                if isinstance(guard_decision, ActionGuardDecision):
+                    allow = guard_decision == ActionGuardDecision.ALLOW
+                else:
+                    # Unknown return type (including bool): default to deny for safety
+                    verbose_logger.warning(
+                        "action_guard returned unsupported type %s, blocking tool call",
+                        type(guard_decision).__name__,
+                    )
+                    allow = False
+
+                if not allow:
+                    return CallToolResult(
+                        content=[
+                            TextContent(
+                                type="text",
+                                text=ACTION_GUARD_BLOCKED_MESSAGE,
+                            )
+                        ],
+                        isError=True,
+                    )
+            except Exception as guard_exc:
+                verbose_logger.exception(
+                    "action_guard raised exception, blocking tool call: %s",
+                    guard_exc,
+                )
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=ACTION_GUARD_EXCEPTION_MESSAGE,
+                        )
+                    ],
+                    isError=True,
+                )
 
         # Prepare tasks for during hooks
         tasks = []
