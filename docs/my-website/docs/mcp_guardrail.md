@@ -96,9 +96,9 @@ In addition to server-side MCP guardrails, the Python client supports a simple c
 
 Key points:
 - `action_guard` is an optional callable passed to `litellm.completion` / `litellm.acompletion`.
-- The guard is invoked for each pending tool call (both MCP and non-MCP) before it is returned.
-- For MCP tools, a `BLOCK` decision prevents the MCP call from being executed. For non-MCP tools, a `BLOCK` decision removes the corresponding `tool_calls` from the response on the client side, rather than preventing any server-side execution.
-- The guard receives a dict with the following keys: `name`, `arguments`, `server_name`.
+- The guard is invoked for each pending MCP tool call (and certain internal skills / mock tool executions) before it is executed. It is not currently applied to standard non-MCP / `type: "function"` tool calls returned by normal chat-completions.
+- For MCP tools, a `BLOCK` decision prevents the MCP call from being executed.
+- The guard receives a dict describing the pending action. This will at least include `name` and `arguments`, and for MCP tools may also include `server_name`.
 - The guard must return `litellm.types.utils.ActionGuardDecision.ALLOW` to permit execution, or `litellm.types.utils.ActionGuardDecision.BLOCK` to block it.
 
 Example usage:
