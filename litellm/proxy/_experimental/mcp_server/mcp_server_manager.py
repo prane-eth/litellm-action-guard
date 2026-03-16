@@ -93,6 +93,9 @@ except ImportError:
         return _ToolNameValidationResult()
 
 
+ACTION_GUARD_BLOCKED_MESSAGE = "Tool call blocked by action_guard"
+ACTION_GUARD_EXCEPTION_MESSAGE = "Tool call blocked due to action_guard exception"
+
 # Probe includes characters on both sides of the separator to mimic real prefixed tool names.
 _separator_probe_tool_name = f"litellm{MCP_TOOL_PREFIX_SEPARATOR}probe"
 _separator_probe = validate_tool_name(_separator_probe_tool_name)
@@ -2243,7 +2246,7 @@ class MCPServerManager:
                         content=[
                             TextContent(
                                 type="text",
-                                text="Tool call blocked by action_guard",
+                                text=ACTION_GUARD_BLOCKED_MESSAGE,
                             )
                         ],
                         isError=True,
@@ -2257,7 +2260,7 @@ class MCPServerManager:
                     content=[
                         TextContent(
                             type="text",
-                            text="Tool call blocked due to action_guard exception",
+                            text=ACTION_GUARD_EXCEPTION_MESSAGE,
                         )
                     ],
                     isError=True,
