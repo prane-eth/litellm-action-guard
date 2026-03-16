@@ -1175,7 +1175,7 @@ def completion(  # type: ignore # noqa: PLR0915
         should_use_mcp_gateway = LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
             tools=tools_for_mcp
         )
-        if should_use_mcp_gateway or action_guard is not None:
+        if should_use_mcp_gateway:
             # Return coroutine - acompletion will await it
             # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
             return acompletion_with_mcp(  # type: ignore[return-value]
