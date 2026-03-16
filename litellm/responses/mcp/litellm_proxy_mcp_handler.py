@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     Iterable,
     List,
@@ -537,6 +538,7 @@ class LiteLLM_Proxy_MCP_Handler:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        action_guard: Optional[Callable] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -703,6 +705,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
+                    action_guard=action_guard,
                 )
 
                 if litellm_logging_obj:

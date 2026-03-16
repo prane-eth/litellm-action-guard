@@ -220,6 +220,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 litellm_trace_id,
                 openai_tools,
                 base_call_args,
+                action_guard=None,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -232,6 +233,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 self.litellm_call_id = litellm_call_id
                 self.litellm_trace_id = litellm_trace_id
                 self.openai_tools = openai_tools
+                self.action_guard = action_guard
                 self.base_call_args = base_call_args
                 self.collected_chunks: List[ModelResponseStream] = []
                 self.tool_calls: Optional[List] = None
@@ -456,6 +458,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                                 raw_headers=self.raw_headers,
                                 litellm_call_id=self.litellm_call_id,
                                 litellm_trace_id=self.litellm_trace_id,
+                                action_guard=self.action_guard,
                             )
                         )
 
@@ -518,6 +521,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
             base_call_args=base_call_args,
+            action_guard=kwargs.get("action_guard"),
         )
 
         # Create a wrapper class that delegates to our custom iterator
@@ -637,6 +641,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         raw_headers=raw_headers,
         litellm_call_id=kwargs.get("litellm_call_id"),
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        action_guard=kwargs.get("action_guard"),
     )
 
     if not tool_results:
