@@ -65,6 +65,29 @@ for chunk in response:
     print(chunk)
 ```
 
+### Agent Config and Guardrails
+
+LiteLLM exposes `agent_config` as a first-class Python SDK argument for agent
+interactions. If you also pass `guardrails`, LiteLLM will merge them into the
+agent config for agent requests and forward them to the `/responses` bridge for
+non-native providers.
+
+```python showLineNumbers title="Agent Interaction with Guardrails"
+from litellm import create_interaction
+import os
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+response = create_interaction(
+    agent="deep-research-pro-preview-12-2025",
+    input="Research recent changes in GPU export controls.",
+    agent_config={"type": "dynamic"},
+    guardrails=["tool-input", "tool-output"],
+)
+
+print(response.status)
+```
+
 ## **LiteLLM AI Gateway (Proxy) Usage**
 
 ### Setup
@@ -172,13 +195,18 @@ for chunk in client.interactions.create_stream(
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `model` | string | Yes | Model to use (e.g., `gemini/gemini-2.5-flash`) |
+| `model` | string | Yes* | Model to use (e.g., `gemini/gemini-2.5-flash`) |
+| `agent` | string | Yes* | Agent to use for agent interactions (e.g., `deep-research-pro-preview-12-2025`) |
 | `input` | string | Yes | The input text for the interaction |
 | `stream` | boolean | No | Enable streaming responses |
 | `tools` | array | No | Tools available to the model |
 | `system_instruction` | string | No | System instructions for the model |
 | `generation_config` | object | No | Generation configuration |
 | `previous_interaction_id` | string | No | ID of previous interaction for context |
+| `agent_config` | object | No | Provider-specific agent configuration for agent requests |
+| `guardrails` | array | No | LiteLLM passthrough guardrails for agent config / bridge-backed responses |
+
+\* Pass either `model` or `agent`.
 
 ### Response Format
 

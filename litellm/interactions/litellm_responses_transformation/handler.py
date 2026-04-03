@@ -41,6 +41,7 @@ class LiteLLMResponsesInteractionsHandler:
         custom_llm_provider: Optional[str] = None,
         _is_async: bool = False,
         stream: Optional[bool] = None,
+        guardrails: Optional[Any] = None,
         **kwargs,
     ) -> Union[
         InteractionsAPIResponse,
@@ -76,6 +77,7 @@ class LiteLLMResponsesInteractionsHandler:
             optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
             stream=stream,
+            guardrails=guardrails,
             **kwargs,
         )
 

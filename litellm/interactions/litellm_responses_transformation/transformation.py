@@ -28,6 +28,7 @@ class LiteLLMResponsesInteractionsConfig:
         model: str,
         input: Optional[InteractionInput],
         optional_params: InteractionsAPIOptionalRequestParams,
+        guardrails: Optional[Any] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -80,6 +81,15 @@ class LiteLLMResponsesInteractionsConfig:
         for param in passthrough_params:
             if param in optional_params and optional_params[param] is not None:
                 responses_request[param] = optional_params[param]
+
+        resolved_guardrails = guardrails
+        if resolved_guardrails is None:
+            agent_config = optional_params.get("agent_config")
+            if isinstance(agent_config, dict):
+                resolved_guardrails = agent_config.get("guardrails")
+
+        if resolved_guardrails is not None:
+            responses_request["guardrails"] = resolved_guardrails
 
         # Add any extra kwargs
         responses_request.update(kwargs)

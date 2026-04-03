@@ -23,6 +23,40 @@ INTERACTIONS_API_OPTIONAL_PARAMS = {
 }
 
 
+def normalize_interactions_agent_config(
+    agent: Optional[str],
+    agent_config: Optional[Any],
+    guardrails: Optional[Any],
+) -> Optional[Any]:
+    """
+    Normalize agent-specific config before request construction.
+
+    - If `guardrails` is provided alongside an explicit `agent_config`, merge it in.
+    - If `guardrails` is provided for an agent interaction without `agent_config`,
+      create a minimal dynamic config so the payload has a valid discriminator.
+    - If this is not an agent interaction, leave `agent_config` untouched.
+    """
+    normalized_agent_config = agent_config
+
+    if hasattr(agent_config, "model_dump"):
+        normalized_agent_config = agent_config.model_dump()
+    elif hasattr(agent_config, "dict"):
+        normalized_agent_config = agent_config.dict()
+
+    if guardrails is None:
+        return normalized_agent_config
+
+    if isinstance(normalized_agent_config, dict):
+        merged_agent_config = dict(normalized_agent_config)
+        merged_agent_config["guardrails"] = guardrails
+        return merged_agent_config
+
+    if agent is not None:
+        return {"type": "dynamic", "guardrails": guardrails}
+
+    return normalized_agent_config
+
+
 def get_provider_interactions_api_config(
     provider: str,
     model: Optional[str] = None,

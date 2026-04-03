@@ -43,6 +43,7 @@ from litellm.interactions.http_handler import interactions_http_handler
 from litellm.interactions.utils import (
     InteractionsAPIRequestUtils,
     get_provider_interactions_api_config,
+    normalize_interactions_agent_config,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.interactions import (
@@ -86,6 +87,9 @@ async def acreate(
     response_mime_type: Optional[str] = None,
     # Continuation
     previous_interaction_id: Optional[str] = None,
+    # Agent configuration
+    agent_config: Optional[Dict[str, Any]] = None,
+    guardrails: Optional[Any] = None,
     # Extra params
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -113,6 +117,8 @@ async def acreate(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        agent_config: Provider-specific agent configuration
+        guardrails: Guardrail config to pass through to agent-capable backends
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -148,6 +154,8 @@ async def acreate(
             response_format=response_format,
             response_mime_type=response_mime_type,
             previous_interaction_id=previous_interaction_id,
+            agent_config=agent_config,
+            guardrails=guardrails,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout,
@@ -200,6 +208,9 @@ def create(
     response_mime_type: Optional[str] = None,
     # Continuation
     previous_interaction_id: Optional[str] = None,
+    # Agent configuration
+    agent_config: Optional[Dict[str, Any]] = None,
+    guardrails: Optional[Any] = None,
     # Extra params
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -235,6 +246,8 @@ def create(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        agent_config: Provider-specific agent configuration
+        guardrails: Guardrail config to pass through to agent-capable backends
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -267,6 +280,13 @@ def create(
             model=model,
         )
 
+        normalized_agent_config = normalize_interactions_agent_config(
+            agent=agent,
+            agent_config=agent_config,
+            guardrails=guardrails,
+        )
+        local_vars["agent_config"] = normalized_agent_config
+
         # Get optional params using utility (similar to responses API pattern)
         local_vars.update(kwargs)
         optional_params = (
@@ -294,6 +314,7 @@ def create(
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
                 stream=stream,
+                guardrails=guardrails,
                 **kwargs,
             )
 

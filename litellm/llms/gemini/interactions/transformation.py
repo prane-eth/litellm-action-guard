@@ -67,6 +67,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "response_format",
             "response_mime_type",
             "previous_interaction_id",
+            "agent_config",
         ]
 
     def validate_environment(
@@ -146,6 +147,9 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         for key in optional_keys:
             if optional_params.get(key) is not None:
                 request_body[key] = optional_params[key]
+
+        if agent is not None and optional_params.get("agent_config") is not None:
+            request_body["agent_config"] = optional_params["agent_config"]
 
         return request_body
 
