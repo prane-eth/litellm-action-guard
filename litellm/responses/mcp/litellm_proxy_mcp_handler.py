@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     Iterable,
     List,
@@ -13,14 +14,21 @@ from typing import (
     Union,
 )
 
+from litellm._action_guard import call_action_guard_async
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import (
+    ACTION_GUARD_BLOCKED_MESSAGE,
+    ACTION_GUARD_EXCEPTION_MESSAGE,
+    MAXIMUM_TRACEBACK_LINES_TO_LOG,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import (
+    ActionGuardDecision,
     CallTypes,
     Choices,
     ModelResponse,
@@ -527,6 +535,65 @@ class LiteLLM_Proxy_MCP_Handler:
         return result_text or "Tool executed successfully"
 
     @staticmethod
+    async def _run_action_guard_for_tool_call(
+        action_guard: Optional[Callable],
+        *,
+        name: str,
+        arguments: Dict[str, Any],
+        server_name: str,
+    ) -> Optional[str]:
+        """
+        Return a block message when action_guard denies the tool call.
+
+        Returning None means the call is allowed.
+        """
+        if action_guard is None:
+            return None
+
+        guard_input = {
+            "name": name,
+            "arguments": arguments,
+            "server_name": server_name,
+        }
+
+        try:
+            guard_decision = await call_action_guard_async(
+                action_guard=action_guard,
+                guard_input=guard_input,
+            )
+        except Exception as guard_exc:
+            verbose_logger.exception(
+                "action_guard raised exception before MCP tool execution: %s",
+                guard_exc,
+            )
+            return ACTION_GUARD_EXCEPTION_MESSAGE
+
+        if isinstance(guard_decision, ActionGuardDecision):
+            if guard_decision == ActionGuardDecision.ALLOW:
+                return None
+            return ACTION_GUARD_BLOCKED_MESSAGE
+
+        verbose_logger.warning(
+            "action_guard returned unsupported type %s, blocking tool call",
+            type(guard_decision).__name__,
+        )
+        return ACTION_GUARD_BLOCKED_MESSAGE
+
+    @staticmethod
+    def _get_action_guard_block_message(
+        tool_results: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Return the action_guard block text if any tool result represents a block."""
+        for tool_result in tool_results:
+            result_text = tool_result.get("result")
+            if result_text in (
+                ACTION_GUARD_BLOCKED_MESSAGE,
+                ACTION_GUARD_EXCEPTION_MESSAGE,
+            ):
+                return result_text
+        return None
+
+    @staticmethod
     async def _execute_tool_calls(  # noqa: PLR0915
         tool_server_map: dict[str, str],
         tool_calls: List[Any],
@@ -537,6 +604,7 @@ class LiteLLM_Proxy_MCP_Handler:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        action_guard: Optional[Callable] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -569,9 +637,6 @@ class LiteLLM_Proxy_MCP_Handler:
                     tool_arguments
                 )
 
-                # Import here to avoid circular import
-                from litellm.proxy.proxy_server import proxy_logging_obj
-
                 server_name = tool_server_map[tool_name]
 
                 # Remove the server name prefix if the tool name includes it.
@@ -585,6 +650,24 @@ class LiteLLM_Proxy_MCP_Handler:
                     and unprefixed_name
                 ):
                     sanitized_tool_name = unprefixed_name
+
+                block_message = (
+                    await LiteLLM_Proxy_MCP_Handler._run_action_guard_for_tool_call(
+                        action_guard=action_guard,
+                        name=sanitized_tool_name,
+                        arguments=parsed_arguments,
+                        server_name=server_name,
+                    )
+                )
+                if block_message is not None:
+                    tool_results.append(
+                        {
+                            "tool_call_id": tool_call_id,
+                            "result": block_message,
+                            "name": tool_name,
+                        }
+                    )
+                    continue
 
                 start_time = datetime.now()
                 logging_input = [
@@ -703,6 +786,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
+                    action_guard=action_guard,
                 )
 
                 if litellm_logging_obj:
@@ -804,6 +888,30 @@ class LiteLLM_Proxy_MCP_Handler:
                 )
 
         return tool_results
+
+    @staticmethod
+    def _create_blocked_response_for_responses_api(
+        response: ResponsesAPIResponse,
+        block_message: str,
+    ) -> ResponsesAPIResponse:
+        """Replace tool-call outputs with a terminal assistant block message."""
+        blocked_output = GenericResponseOutputItem(
+            type="message",
+            id=f"{response.id}_action_guard_block",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text=block_message,
+                    annotations=[],
+                )
+            ],
+        )
+
+        response.output = [blocked_output.model_dump()]  # type: ignore[assignment]
+        response.status = "completed"
+        return response
 
     @staticmethod
     def _create_follow_up_messages_for_chat(

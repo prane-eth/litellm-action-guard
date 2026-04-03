@@ -668,6 +668,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_headers=self.raw_headers,
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
+                action_guard=self.original_request_params.get("action_guard"),
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -742,6 +743,13 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
 
         try:
+            block_message = LiteLLM_Proxy_MCP_Handler._get_action_guard_block_message(
+                self.tool_results
+            )
+            if block_message is not None:
+                self.follow_up_iterator = None
+                return
+
             # Create follow-up input
             if self.collected_response is not None:
                 follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(

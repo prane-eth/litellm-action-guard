@@ -1549,3 +1549,7 @@ MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
 MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
 COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
 DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
+
+# Action Guard Constants
+ACTION_GUARD_BLOCKED_MESSAGE = "Tool call blocked by action_guard"
+ACTION_GUARD_EXCEPTION_MESSAGE = "Tool call blocked due to action_guard exception"

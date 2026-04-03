@@ -337,9 +337,24 @@ async def aresponses_api_with_mcp(
                 raw_headers=raw_headers_from_request,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
+                action_guard=kwargs.get("action_guard"),
             )
 
             if tool_results:
+                block_message = (
+                    LiteLLM_Proxy_MCP_Handler._get_action_guard_block_message(
+                        tool_results
+                    )
+                )
+                if block_message is not None:
+                    response = (
+                        LiteLLM_Proxy_MCP_Handler._create_blocked_response_for_responses_api(
+                            response=response,
+                            block_message=block_message,
+                        )
+                    )
+                    return response
+
                 follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
                     response=response, tool_results=tool_results, original_input=input
                 )
