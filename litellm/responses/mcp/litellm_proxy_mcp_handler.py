@@ -4,11 +4,13 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     Iterable,
     List,
     Literal,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -53,6 +55,100 @@ _PROXY_MCP_PATH_RE = re.compile(r"^https?://.+/mcp/([^/]+)$")
 
 
 class LiteLLM_Proxy_MCP_Handler:
+    @staticmethod
+    def _normalize_tool_guardrails(
+        guardrails: Optional[
+            Union[
+                Callable[[Dict[str, Any], str], bool],
+                Sequence[Callable[[Dict[str, Any], str], bool]],
+            ]
+        ],
+    ) -> List[Callable[[Dict[str, Any], str], bool]]:
+        """Normalize a single guardrail or list of guardrails into a list."""
+        if guardrails is None:
+            return []
+        if callable(guardrails):
+            return [guardrails]
+        return [g for g in guardrails if callable(g)]
+
+    @staticmethod
+    def _run_tool_guardrails(
+        guardrails: List[Callable[[Dict[str, Any], str], bool]],
+        payload: Dict[str, Any],
+        agent_name: str,
+        guardrail_type: Literal["input", "output"],
+    ) -> bool:
+        """
+        Run all configured guardrails and return True if allowed.
+
+        A guardrail returning False or raising an exception blocks tool execution.
+        """
+        for guardrail in guardrails:
+            try:
+                if guardrail(payload, agent_name) is not True:
+                    verbose_logger.warning(
+                        "MCP %s guardrail blocked tool call for agent=%s tool=%s",
+                        guardrail_type,
+                        agent_name,
+                        payload.get("tool_name"),
+                    )
+                    return False
+            except Exception as e:
+                verbose_logger.warning(
+                    "MCP %s guardrail raised error for agent=%s tool=%s error=%s",
+                    guardrail_type,
+                    agent_name,
+                    payload.get("tool_name"),
+                    str(e),
+                )
+                return False
+        return True
+
+    @staticmethod
+    def _resolve_agent_name(
+        agent_name: Optional[str],
+        fallback_model_name: Optional[str] = None,
+    ) -> str:
+        """Resolve an agent name with safe defaults for guardrail calls."""
+        if agent_name and isinstance(agent_name, str):
+            return agent_name
+        if fallback_model_name and isinstance(fallback_model_name, str):
+            return fallback_model_name
+        return "unknown_agent"
+
+    @staticmethod
+    def _get_blocked_tool_result(
+        *,
+        tool_call_id: Optional[str],
+        tool_name: Optional[str],
+        blocked_on: Literal["input", "output"],
+    ) -> Dict[str, Any]:
+        """Build a consistent blocked-tool result payload."""
+        return {
+            "tool_call_id": tool_call_id,
+            "result": f"Tool call blocked by {blocked_on} guardrail policy.",
+            "name": tool_name,
+        }
+
+    @staticmethod
+    def _extract_agent_name_from_kwargs(kwargs: Dict[str, Any]) -> Optional[str]:
+        """
+        Best-effort extraction of agent name from request kwargs.
+
+        Keeps this optional and non-breaking for callers that do not provide
+        explicit agent metadata.
+        """
+        agent_name = kwargs.get("agent_name")
+        if isinstance(agent_name, str):
+            return agent_name
+
+        metadata = kwargs.get("metadata")
+        if isinstance(metadata, dict):
+            metadata_agent_name = metadata.get("agent_name")
+            if isinstance(metadata_agent_name, str):
+                return metadata_agent_name
+        return None
+
     """
     Helper class with static methods for MCP integration with Responses API.
 
@@ -162,7 +258,9 @@ class LiteLLM_Proxy_MCP_Handler:
                     mcp_servers=all_server_ids,
                     mcp_tool_permissions=tool_permissions,
                 )
-            return user_api_key_auth.model_copy(update={"object_permission": updated_op})
+            return user_api_key_auth.model_copy(
+                update={"object_permission": updated_op}
+            )
         except Exception as _e:
             verbose_logger.debug(f"Could not apply toolset permissions: {_e}")
             return user_api_key_auth
@@ -259,10 +357,12 @@ class LiteLLM_Proxy_MCP_Handler:
 
         # Apply all resolved toolsets at once (union), avoiding permission overwrite.
         if resolved_toolset_ids and user_api_key_auth is not None:
-            user_api_key_auth = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
-                resolved_toolset_ids=resolved_toolset_ids,
-                resolved_mcp_servers=resolved_mcp_servers,
-                user_api_key_auth=user_api_key_auth,
+            user_api_key_auth = (
+                await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+                    resolved_toolset_ids=resolved_toolset_ids,
+                    resolved_mcp_servers=resolved_mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                )
             )
 
         # When toolsets were resolved we updated object_permission.mcp_servers to the
@@ -650,6 +750,19 @@ class LiteLLM_Proxy_MCP_Handler:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        tool_input_guardrails: Optional[
+            Union[
+                Callable[[Dict[str, Any], str], bool],
+                Sequence[Callable[[Dict[str, Any], str], bool]],
+            ]
+        ] = None,
+        tool_output_guardrails: Optional[
+            Union[
+                Callable[[Dict[str, Any], str], bool],
+                Sequence[Callable[[Dict[str, Any], str], bool]],
+            ]
+        ] = None,
+        agent_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -664,6 +777,13 @@ class LiteLLM_Proxy_MCP_Handler:
         tool_results = []
         tool_call_id: Optional[str] = None
         rules_obj = Rules()
+        input_guardrails = LiteLLM_Proxy_MCP_Handler._normalize_tool_guardrails(
+            tool_input_guardrails
+        )
+        output_guardrails = LiteLLM_Proxy_MCP_Handler._normalize_tool_guardrails(
+            tool_output_guardrails
+        )
+        resolved_agent_name = LiteLLM_Proxy_MCP_Handler._resolve_agent_name(agent_name)
         for tool_call in tool_calls:
             logging_request_data: Dict[str, Any] = {}
             tool_name: Optional[str] = None
@@ -795,16 +915,40 @@ class LiteLLM_Proxy_MCP_Handler:
                         standard_logging_mcp_tool_call["mcp_server_logo_url"] = logo_url
                     cost_info = mcp_info.get("mcp_server_cost_info")
                     if cost_info:
-                        standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
-                            cost_info
-                        )
+                        standard_logging_mcp_tool_call[
+                            "mcp_server_cost_info"
+                        ] = cost_info
 
                 if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                        standard_logging_mcp_tool_call
-                    )
+                    litellm_logging_obj.model_call_details[
+                        "mcp_tool_call_metadata"
+                    ] = standard_logging_mcp_tool_call
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+
+                input_guardrail_payload = {
+                    "tool_name": sanitized_tool_name,
+                    "tool_call_id": tool_call_id,
+                    "arguments": parsed_arguments,
+                    "server_name": server_name,
+                }
+                if (
+                    input_guardrails
+                    and not LiteLLM_Proxy_MCP_Handler._run_tool_guardrails(
+                        guardrails=input_guardrails,
+                        payload=input_guardrail_payload,
+                        agent_name=resolved_agent_name,
+                        guardrail_type="input",
+                    )
+                ):
+                    tool_results.append(
+                        LiteLLM_Proxy_MCP_Handler._get_blocked_tool_result(
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            blocked_on="input",
+                        )
+                    )
+                    continue
 
                 result = await global_mcp_server_manager.call_tool(
                     server_name=server_name,
@@ -840,6 +984,31 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 # Format result for inclusion in response
                 result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+                output_guardrail_payload = {
+                    "tool_name": sanitized_tool_name,
+                    "tool_call_id": tool_call_id,
+                    "arguments": parsed_arguments,
+                    "server_name": server_name,
+                    "result": result,
+                    "result_text": result_text,
+                }
+                if (
+                    output_guardrails
+                    and not LiteLLM_Proxy_MCP_Handler._run_tool_guardrails(
+                        guardrails=output_guardrails,
+                        payload=output_guardrail_payload,
+                        agent_name=resolved_agent_name,
+                        guardrail_type="output",
+                    )
+                ):
+                    tool_results.append(
+                        LiteLLM_Proxy_MCP_Handler._get_blocked_tool_result(
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            blocked_on="output",
+                        )
+                    )
+                    continue
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,

@@ -668,6 +668,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_headers=self.raw_headers,
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
+                tool_input_guardrails=self.original_request_params.get(
+                    "tool_input_guardrails"
+                ),
+                tool_output_guardrails=self.original_request_params.get(
+                    "tool_output_guardrails"
+                ),
+                agent_name=LiteLLM_Proxy_MCP_Handler._extract_agent_name_from_kwargs(
+                    self.original_request_params
+                ),
             )
 
             # Create completion events and output_item.done events for tool execution

@@ -161,6 +161,8 @@ async def aresponses_api_with_mcp(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
+    tool_input_guardrails: Optional[Any] = None,
+    tool_output_guardrails: Optional[Any] = None,
     **kwargs,
 ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
     """
@@ -337,6 +339,11 @@ async def aresponses_api_with_mcp(
                 raw_headers=raw_headers_from_request,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
+                tool_input_guardrails=tool_input_guardrails,
+                tool_output_guardrails=tool_output_guardrails,
+                agent_name=LiteLLM_Proxy_MCP_Handler._extract_agent_name_from_kwargs(
+                    kwargs
+                ),
             )
 
             if tool_results:
