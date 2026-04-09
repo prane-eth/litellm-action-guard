@@ -113,6 +113,18 @@ from agents import (
     function_tool,
     set_tracing_disabled,
 )
+# Tool guardrails for auto-executed tool calls.
+# Signature: guardrail(tool_data: dict, agent_name: str) -> bool
+def block_harmful_tool_input(tool_data: dict, agent_name: str) -> bool:
+    args = tool_data.get("arguments", {})
+    command = str(args.get("command", ""))
+    return "rm -rf /" not in command
+
+
+def block_sensitive_tool_output(tool_data: dict, agent_name: str) -> bool:
+    output_text = str(tool_data.get("result_text", ""))
+    return "AWS_SECRET_ACCESS_KEY" not in output_text
+
 
 # Point to LiteLLM proxy
 BASE_URL = os.getenv("LITELLM_BASE_URL") or "http://localhost:4000"
@@ -191,6 +203,8 @@ async def test_bedrock_agent():
                      "Use the 'get_weather' tool for city weather requests. "
                      "Present information clearly.",
         tools=[get_weather],
+        tool_input_guardrails=[block_harmful_tool_input],
+        tool_output_guardrails=[block_sensitive_tool_output],
     )
 
     result = await Runner.run(
@@ -219,6 +233,8 @@ async def test_openai_agent():
                      "Use the 'get_weather' tool for city weather requests. "
                      "Present information clearly.",
         tools=[get_weather],
+        tool_input_guardrails=[block_harmful_tool_input],
+        tool_output_guardrails=[block_sensitive_tool_output],
     )
 
     result = await Runner.run(
@@ -247,6 +263,8 @@ async def test_anthropic_agent():
                      "Use the 'get_weather' tool for city weather requests. "
                      "Present information clearly.",
         tools=[get_weather],
+        tool_input_guardrails=[block_harmful_tool_input],
+        tool_output_guardrails=[block_sensitive_tool_output],
     )
 
     result = await Runner.run(
@@ -285,6 +303,16 @@ from agents import (
     function_tool,
     set_tracing_disabled,
 )
+def block_harmful_tool_input(tool_data: dict, agent_name: str) -> bool:
+    args = tool_data.get("arguments", {})
+    command = str(args.get("command", ""))
+    return "rm -rf /" not in command
+
+
+def block_sensitive_tool_output(tool_data: dict, agent_name: str) -> bool:
+    output_text = str(tool_data.get("result_text", ""))
+    return "AWS_SECRET_ACCESS_KEY" not in output_text
+
 
 # Point to LiteLLM proxy
 BASE_URL = os.getenv("LITELLM_BASE_URL") or "http://localhost:4000"
@@ -331,6 +359,8 @@ async def main():
                      "Use the 'get_weather' tool for city weather requests. "
                      "Present information clearly and concisely.",
         tools=[get_weather],
+        tool_input_guardrails=[block_harmful_tool_input],
+        tool_output_guardrails=[block_sensitive_tool_output],
     )
 
     # Run with the default model (bedrock-claude-sonnet-4)

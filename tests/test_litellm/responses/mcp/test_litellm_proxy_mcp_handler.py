@@ -288,9 +288,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     post_call_failure_hook = _setup_proxy_logging(monkeypatch)
 
     fake_manager = types.SimpleNamespace(
-        call_tool=AsyncMock(
-            side_effect=HTTPException(status_code=500, detail="boom")
-        )
+        call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom"))
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -350,9 +348,7 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
-    tool_calls = [
-        {"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}
-    ]
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
 
     await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
@@ -395,7 +391,9 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     user_auth = types.SimpleNamespace(api_key="test_key", user_id="test_user")
     tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=user_auth,
-        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}],
+        mcp_tools_with_litellm_proxy=[
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}
+        ],
     )
 
     assert tools == []
@@ -403,3 +401,103 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     assert mock_get_tools.await_args is not None
     assert mock_get_tools.await_args.kwargs["log_list_tools_to_spendlogs"] is True
     assert mock_get_tools.await_args.kwargs["list_tools_log_source"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_supports_multiple_input_guardrails(monkeypatch):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    tool_name = "read_wiki_structure"
+    tool_calls = [
+        {"id": "call-in-1", "function": {"name": tool_name, "arguments": "{}"}}
+    ]
+    invocation_order = []
+
+    def first_input_guardrail(tool_call_data: dict, agent_name: str) -> bool:
+        invocation_order.append("first")
+        assert agent_name == "research_agent"
+        assert tool_call_data["tool_name"] == tool_name
+        return True
+
+    def second_input_guardrail(tool_call_data: dict, agent_name: str) -> bool:
+        invocation_order.append("second")
+        assert agent_name == "research_agent"
+        assert tool_call_data["server_name"] == "deepwiki"
+        return True
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+        tool_input_guardrails=[first_input_guardrail, second_input_guardrail],
+        agent_name="research_agent",
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert invocation_order == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_blocks_harmful_input_when_guardrail_returns_false(
+    monkeypatch,
+):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    tool_name = "shell_execute"
+    tool_calls = [
+        {
+            "id": "call-in-block",
+            "function": {"name": tool_name, "arguments": '{"command":"rm -rf /"}'},
+        }
+    ]
+
+    def block_harmful_input(tool_call_data: dict, agent_name: str) -> bool:
+        assert agent_name == "secure_agent"
+        command = str(tool_call_data.get("arguments", {}).get("command", ""))
+        return "rm -rf /" not in command
+
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "terminal"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+        tool_input_guardrails=[block_harmful_input],
+        agent_name="secure_agent",
+    )
+
+    assert call_tool_mock.await_count == 0
+    assert len(results) == 1
+    assert results[0]["tool_call_id"] == "call-in-block"
+    assert results[0]["name"] == tool_name
+    assert "blocked by input guardrail" in results[0]["result"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_supports_multiple_output_guardrails(monkeypatch):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    tool_name = "read_wiki_structure"
+    tool_calls = [
+        {"id": "call-out-1", "function": {"name": tool_name, "arguments": "{}"}}
+    ]
+    invocation_order = []
+
+    def first_output_guardrail(tool_output_data: dict, agent_name: str) -> bool:
+        invocation_order.append("first")
+        assert agent_name == "research_agent"
+        assert tool_output_data["tool_name"] == tool_name
+        return True
+
+    def second_output_guardrail(tool_output_data: dict, agent_name: str) -> bool:
+        invocation_order.append("second")
+        assert agent_name == "research_agent"
+        return "rm -rf /" not in str(tool_output_data.get("result_text", ""))
+
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+        tool_output_guardrails=[first_output_guardrail, second_output_guardrail],
+        agent_name="research_agent",
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert invocation_order == ["first", "second"]
+    assert len(results) == 1
+    assert results[0]["tool_call_id"] == "call-out-1"

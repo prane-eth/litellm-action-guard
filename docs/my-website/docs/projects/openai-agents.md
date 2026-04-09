@@ -50,6 +50,17 @@ litellm --config config.yaml
 from agents import Agent, Runner
 from agents.extensions.models.litellm_model import LitellmModel
 
+
+def block_harmful_tool_input(tool_data: dict, agent_name: str) -> bool:
+    args = tool_data.get("arguments", {})
+    command = str(args.get("command", ""))
+    return "rm -rf /" not in command
+
+
+def block_sensitive_tool_output(tool_data: dict, agent_name: str) -> bool:
+    output_text = str(tool_data.get("result_text", ""))
+    return "AWS_SECRET_ACCESS_KEY" not in output_text
+
 # Point to LiteLLM proxy
 agent = Agent(
     name="Assistant",
@@ -58,7 +69,9 @@ agent = Agent(
         model="claude-sonnet",  # Model from config.yaml
         api_key="sk-1234",      # LiteLLM API key
         base_url="http://localhost:4000"
-    )
+    ),
+    tool_input_guardrails=[block_harmful_tool_input],
+    tool_output_guardrails=[block_sensitive_tool_output],
 )
 
 result = await Runner.run(agent, "What is LiteLLM?")
@@ -106,6 +119,18 @@ agent = Agent(
 result = await Runner.run(agent, "Hello")
 print(result.context_wrapper.usage)  # Token counts
 ```
+
+## Tool Guardrails
+
+Use `tool_input_guardrails` and `tool_output_guardrails` on `Agent(...)` to enforce
+tool safety checks. Both arguments are optional and default to `None`.
+
+- `tool_input_guardrails`: callable or list of callables with signature
+  `(tool_call_data: dict, agent_name: str) -> bool`
+- `tool_output_guardrails`: callable or list of callables with signature
+  `(tool_output_data: dict, agent_name: str) -> bool`
+
+If any guardrail returns `False` (or raises), the tool call is blocked.
 
 ## Environment Variables
 
